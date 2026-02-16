@@ -281,7 +281,7 @@ public class FishScript : MonoBehaviour
                 movement = Vector3.ProjectOnPlane(movement, planeNormal);
                 Vector3 newPos = transform.position + movement;
                 newPos = PushPointOutOfExclusionZones(newPos);
-                newPos = ConstrainToBoundary(newPos); // keep within raycast boundary during idle
+                // Do NOT constrain the fish position to the boundary; allow natural movement
                 transform.position = newPos;
 
                 if (movement.magnitude > 0.001f)
@@ -296,7 +296,7 @@ public class FishScript : MonoBehaviour
             {
                 Vector3 drift = driftDir.normalized * (pauseDriftSpeed * Time.deltaTime);
                 Vector3 newPos = PushPointOutOfExclusionZones(transform.position + drift);
-                newPos = ConstrainToBoundary(newPos); // keep within raycast boundary during idle
+                // Do NOT constrain the fish position to the boundary; allow natural movement
                 transform.position = newPos;
             }
 
