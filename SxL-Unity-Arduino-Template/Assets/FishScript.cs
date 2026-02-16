@@ -67,6 +67,7 @@ public class FishScript : MonoBehaviour
     private bool[] hasSuccessfulPoint = new bool[4];
 
     private ExclusionZone[] _cachedExclusionZones;
+    private bool _spawnPositionCorrected;
 
     void Start()
     {
@@ -91,10 +92,18 @@ public class FishScript : MonoBehaviour
             hasSuccessfulPoint[i] = false;
         }
 
-        // Resolve exclusion zones: use serialized list or find all in scene
-        _cachedExclusionZones = (exclusionZones != null && exclusionZones.Length > 0)
-            ? exclusionZones
-            : FindObjectsOfType<ExclusionZone>();
+        // Resolve exclusion zones: use serialized list or find all in scene; populate Inspector list when auto-finding
+        if (exclusionZones != null && exclusionZones.Length > 0)
+        {
+            _cachedExclusionZones = exclusionZones;
+        }
+        else
+        {
+            _cachedExclusionZones = FindObjectsOfType<ExclusionZone>();
+            exclusionZones = _cachedExclusionZones; // so the Inspector list shows found zones at runtime
+        }
+        if (_cachedExclusionZones != null && _cachedExclusionZones.Length > 0)
+            Debug.Log($"FishScript: using {_cachedExclusionZones.Length} exclusion zone(s).");
 
         // Start with a random target
         SelectNewTarget();
@@ -106,6 +115,14 @@ public class FishScript : MonoBehaviour
 
         UpdateBoundaryPoints();
         UpdatePlane();
+
+        // One-time: if fish started inside an exclusion zone, move it outside (spawn correction)
+        if (!_spawnPositionCorrected)
+        {
+            _spawnPositionCorrected = true;
+            if (IsPointInExclusionZone(transform.position))
+                transform.position = PushPointOutOfExclusionZones(transform.position);
+        }
 
         if (currentBoundaryValid[0] || currentBoundaryValid[1] || currentBoundaryValid[2] || currentBoundaryValid[3])
         {
@@ -214,10 +231,9 @@ public class FishScript : MonoBehaviour
         movement = Vector3.ProjectOnPlane(movement, planeNormal);
         
         Vector3 newPosition = currentPos + movement;
-        
-        // Constrain to boundary (simple AABB approximation)
-        newPosition = ConstrainToBoundary(newPosition);
-        
+        // Do not constrain to boundary every frame (avoids fish being dragged when boundary moves).
+        // Block entry into exclusion zones by pushing position out if it would land inside.
+        newPosition = PushPointOutOfExclusionZones(newPosition);
         transform.position = newPosition;
 
         // Face movement direction (fish model nose is +X, so rotate -90° from LookRotation)
@@ -264,7 +280,9 @@ public class FishScript : MonoBehaviour
                 Vector3 movement = direction * idleMoveSpeed * Time.deltaTime;
                 movement = Vector3.ProjectOnPlane(movement, planeNormal);
                 Vector3 newPos = transform.position + movement;
-                transform.position = ConstrainToBoundary(newPos);
+                newPos = PushPointOutOfExclusionZones(newPos);
+                newPos = ConstrainToBoundary(newPos); // keep within raycast boundary during idle
+                transform.position = newPos;
 
                 if (movement.magnitude > 0.001f)
                     ApplyFacingRotation(movement.normalized);
@@ -277,7 +295,9 @@ public class FishScript : MonoBehaviour
             if (driftDir.sqrMagnitude > 0.001f)
             {
                 Vector3 drift = driftDir.normalized * (pauseDriftSpeed * Time.deltaTime);
-                transform.position = ConstrainToBoundary(transform.position + drift);
+                Vector3 newPos = PushPointOutOfExclusionZones(transform.position + drift);
+                newPos = ConstrainToBoundary(newPos); // keep within raycast boundary during idle
+                transform.position = newPos;
             }
 
             idlePauseTimer += Time.deltaTime;
@@ -350,6 +370,8 @@ public class FishScript : MonoBehaviour
             return;
         }
 
+        // Do not teleport the fish. If it is outside the boundary, it will move normally toward the new target (which is inside) and re-enter naturally.
+
         // Calculate bounding box of valid points
         Vector3 min = validPoints[0];
         Vector3 max = validPoints[0];
@@ -360,8 +382,9 @@ public class FishScript : MonoBehaviour
             max = Vector3.Max(max, validPoints[i]);
         }
 
-        // Select random point within bounding box, projected onto plane; retry if inside an exclusion zone
-        const int maxRetries = 15;
+        // Select random point within bounding box, projected onto plane; retry if inside or path crosses an exclusion zone
+        Vector3 currentPos = transform.position;
+        const int maxRetries = 25;
         for (int retry = 0; retry < maxRetries; retry++)
         {
             Vector3 randomPoint = new Vector3(
@@ -375,9 +398,15 @@ public class FishScript : MonoBehaviour
             targetPoint = randomPoint - planeNormal * distance;
             targetPoint = ConstrainToBoundary(targetPoint);
 
-            if (!IsPointInExclusionZone(targetPoint))
-                break;
+            if (IsPointInExclusionZone(targetPoint))
+                continue;
             targetPoint = PushPointOutOfExclusionZones(targetPoint);
+            if (IsPointInExclusionZone(targetPoint))
+                continue;
+            // Reject target if straight path would go through an exclusion zone
+            if (PathCrossesExclusionZone(currentPos, targetPoint))
+                continue;
+            break;
         }
     }
 
@@ -388,6 +417,21 @@ public class FishScript : MonoBehaviour
         for (int i = 0; i < _cachedExclusionZones.Length; i++)
         {
             if (_cachedExclusionZones[i] != null && _cachedExclusionZones[i].ContainsPoint(point))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Returns true if the straight path from fromPos to toPos crosses through any exclusion zone.</summary>
+    private bool PathCrossesExclusionZone(Vector3 fromPos, Vector3 toPos)
+    {
+        if (_cachedExclusionZones == null || _cachedExclusionZones.Length == 0) return false;
+        const int samples = 12;
+        for (int s = 1; s < samples; s++)
+        {
+            float t = s / (float)samples;
+            Vector3 sample = Vector3.Lerp(fromPos, toPos, t);
+            if (IsPointInExclusionZone(sample))
                 return true;
         }
         return false;

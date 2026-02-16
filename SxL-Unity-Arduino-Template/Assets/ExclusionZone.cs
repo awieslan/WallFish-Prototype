@@ -17,21 +17,33 @@ public class ExclusionZone : MonoBehaviour
             Debug.LogWarning("ExclusionZone requires a Collider on the same GameObject.", this);
     }
 
-    /// <summary>Returns true if the world-space point is inside this zone.</summary>
+    /// <summary>Returns true if the world-space point is inside this zone. Uses a small OverlapSphere so inside/outside is correct for trigger and non-trigger colliders.</summary>
     public bool ContainsPoint(Vector3 point)
     {
         if (_collider == null) return false;
-
-        // Raycast from point outward; if we hit this collider, the point is inside
-        RaycastHit hit;
-        return _collider.Raycast(new Ray(point, Vector3.up), out hit, 1000f);
+        // A point is inside if a tiny sphere at that position overlaps this collider.
+        const float radius = 0.001f;
+        Collider[] overlaps = Physics.OverlapSphere(point, radius, ~0, QueryTriggerInteraction.Collide);
+        for (int i = 0; i < overlaps.Length; i++)
+            if (overlaps[i] == _collider)
+                return true;
+        return false;
     }
 
-    /// <summary>Returns the closest point on the zone boundary to the given point. Use to push a point outside.</summary>
+    /// <summary>Returns a point outside the zone near the given point. If the point is inside, returns a point just outside the surface so the fish can escape.</summary>
     public Vector3 ClosestPointOutside(Vector3 point)
     {
         if (_collider == null) return point;
-        return _collider.ClosestPoint(point);
+        if (!ContainsPoint(point))
+            return point; // already outside
+        Vector3 closest = _collider.ClosestPoint(point);
+        // Nudge outward from surface (from point toward surface = closest - point, so outward from surface is same direction)
+        Vector3 outward = (closest - point);
+        if (outward.sqrMagnitude < 0.0001f)
+            outward = (point - _collider.bounds.center).normalized;
+        else
+            outward = outward.normalized;
+        return closest + outward * 0.05f;
     }
 
 #if UNITY_EDITOR
